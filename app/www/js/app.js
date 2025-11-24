@@ -10,6 +10,7 @@ let appReady = false;
 
 let busMarker = null;
 let stopMarker = null;
+let userMarker = null;       // NOUVEAU : Marqueur position utilisateur
 let stopPosition = null;
 let busNearNotified = false;
 
@@ -17,13 +18,159 @@ let busNearNotified = false;
 // INITIALISATION DE LA CARTE
 // ---------------------------------------------------------
 function initMap() {
-    // Position initiale : Guadeloupe
+    // Position initiale par défaut : Guadeloupe
     map = L.map("map").setView([16.265, -61.551], 13);
 
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: "© OpenStreetMap",
         maxZoom: 19
     }).addTo(map);
+    
+    // NOUVEAU : Obtenir et afficher la position actuelle au démarrage
+    obtenirPositionInitiale();
+}
+
+// ---------------------------------------------------------
+// DEMANDER LES PERMISSIONS DE LOCALISATION
+// ---------------------------------------------------------
+function demanderPermissionsLocalisation() {
+    return new Promise((resolve, reject) => {
+        console.log("🔐 Demande des permissions de localisation...");
+        
+        // Vérifier si Cordova diagnostic plugin est disponible
+        if (window.cordova && cordova.plugins && cordova.plugins.diagnostic) {
+            cordova.plugins.diagnostic.requestLocationAuthorization(
+                (status) => {
+                    console.log("✅ Permission accordée:", status);
+                    
+                    // Vérifier si le GPS est activé
+                    cordova.plugins.diagnostic.isLocationEnabled(
+                        (enabled) => {
+                            if (enabled) {
+                                console.log("✅ GPS activé");
+                                resolve(true);
+                            } else {
+                                console.warn("⚠️ GPS désactivé");
+                                if (confirm("Le GPS est désactivé. Voulez-vous l'activer dans les paramètres ?")) {
+                                    cordova.plugins.diagnostic.switchToLocationSettings();
+                                }
+                                reject(new Error("GPS désactivé"));
+                            }
+                        },
+                        (error) => {
+                            console.error("Erreur vérification GPS:", error);
+                            reject(error);
+                        }
+                    );
+                },
+                (error) => {
+                    console.error("❌ Permission refusée:", error);
+                    alert("L'application a besoin de votre localisation pour fonctionner.\nVeuillez autoriser l'accès dans les paramètres.");
+                    reject(error);
+                },
+                cordova.plugins.diagnostic.locationAuthorizationMode.ALWAYS
+            );
+        } else {
+            // Fallback pour navigateur web ou si plugin absent
+            console.log("🌐 Mode web - demande permission navigateur");
+            navigator.geolocation.getCurrentPosition(
+                () => {
+                    console.log("✅ Permission navigateur accordée");
+                    resolve(true);
+                },
+                (err) => {
+                    console.error("❌ Permission navigateur refusée:", err);
+                    alert("Veuillez autoriser l'accès à votre localisation.");
+                    reject(err);
+                },
+                { enableHighAccuracy: true, timeout: 5000 }
+            );
+        }
+    });
+}
+
+// ---------------------------------------------------------
+// OBTENIR LA POSITION INITIALE AU DÉMARRAGE
+// ---------------------------------------------------------
+function obtenirPositionInitiale() {
+    console.log("📍 Obtention de la position initiale...");
+    setStatus("Recherche de votre position...");
+    
+    if (!navigator.geolocation) {
+        console.warn("Géolocalisation non supportée");
+        setStatus("Géolocalisation non disponible. Choisissez un mode.");
+        return;
+    }
+    
+    navigator.geolocation.getCurrentPosition(
+        (pos) => {
+            const lat = pos.coords.latitude;
+            const lng = pos.coords.longitude;
+            const accuracy = pos.coords.accuracy;
+            
+            console.log("✅ Position initiale trouvée:", lat, lng);
+            console.log("   Précision:", Math.round(accuracy), "mètres");
+            
+            // Vérifier que ce n'est pas une position par défaut (0,0)
+            if (lat === 0 && lng === 0) {
+                console.warn("⚠️ Position (0,0) détectée - GPS probablement inactif");
+                setStatus("GPS inactif. Activez-le dans les paramètres. Choisissez un mode.");
+                return;
+            }
+            
+            // Centrer la carte sur la position
+            map.setView([lat, lng], 15);
+            
+            // Ajouter un marqueur pour la position de l'utilisateur
+            if (!userMarker) {
+                userMarker = L.marker([lat, lng], {
+                    title: "Votre position",
+                    icon: L.icon({
+                        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
+                        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                        iconSize: [25, 41],
+                        iconAnchor: [12, 41],
+                        popupAnchor: [1, -34],
+                        shadowSize: [41, 41]
+                    })
+                }).addTo(map);
+                userMarker.bindPopup(`📍 Vous êtes ici<br>Précision: ${Math.round(accuracy)}m`);
+            } else {
+                userMarker.setLatLng([lat, lng]);
+            }
+            
+            setStatus(`Position trouvée (±${Math.round(accuracy)}m). Choisissez un mode.`);
+        },
+        (err) => {
+            console.error("⚠️ Erreur obtention position initiale:");
+            console.error("   Code:", err.code);
+            console.error("   Message:", err.message);
+            
+            let message = "Impossible de vous localiser. ";
+            
+            switch(err.code) {
+                case 1:
+                    message += "Permission refusée.";
+                    break;
+                case 2:
+                    message += "GPS désactivé ou signal faible.";
+                    break;
+                case 3:
+                    message += "Délai d'attente dépassé.";
+                    break;
+            }
+            
+            message += " Vous pouvez quand même utiliser l'app.";
+            
+            setStatus(message);
+            alert(message + "\n\nActivez votre GPS pour une meilleure expérience.");
+        },
+        {
+            enableHighAccuracy: true,
+            timeout: 15000,
+            maximumAge: 0
+        }
+    );
 }
 
 // ---------------------------------------------------------
@@ -88,11 +235,16 @@ function activerModeBus() {
     // Arrêter le mode carte cliquable
     map.off("click");
     
-    // Supprimer le marqueur d'arrêt si existant
+    // Supprimer les marqueurs d'arrêt et utilisateur si existants
     if (stopMarker) {
         map.removeLayer(stopMarker);
         stopMarker = null;
         stopPosition = null;
+    }
+    
+    if (userMarker) {
+        map.removeLayer(userMarker);
+        userMarker = null;
     }
 
     // Arrêter l'intervalle précédent s'il existe
@@ -177,20 +329,39 @@ function activerModeBus() {
                         msgErreur += "Position indisponible. Êtes-vous à l'intérieur ?";
                         break;
                     case 3:
-                        msgErreur += "Timeout. Réessayez.";
+                        msgErreur += "Timeout. Allez dehors ou augmentez le timeout.";
                         break;
                     default:
                         msgErreur += err.message;
                 }
                 
                 console.error(msgErreur);
-                alert(msgErreur);
                 setStatus(msgErreur);
+                
+                // NOUVEAU : Proposer d'utiliser une position approximative
+                if (confirm(msgErreur + "\n\nVoulez-vous utiliser une position de test ?")) {
+                    const posTest = {
+                        lat: 16.265 + (Math.random() - 0.5) * 0.01,
+                        lng: -61.551 + (Math.random() - 0.5) * 0.01
+                    };
+                    
+                    afficherBus(posTest);
+                    map.setView([posTest.lat, posTest.lng], 15);
+                    
+                    socket.emit("bus:position", {
+                        lat: posTest.lat,
+                        lng: posTest.lng,
+                        busId: "BUS_1",
+                        timestamp: Date.now()
+                    });
+                    
+                    setStatus("Position test utilisée");
+                }
             },
             {
                 enableHighAccuracy: true,
-                timeout: 15000,
-                maximumAge: 0
+                timeout: 30000,        // 30 secondes au lieu de 15
+                maximumAge: 5000       // Accepter position de moins de 5 sec
             }
         );
     }
@@ -232,7 +403,7 @@ function activerModeArret() {
     map.on("click", (e) => {
         stopPosition = e.latlng;
 
-        // Créer ou déplacer le marqueur d'arrêt
+        // Créer ou déplacer le marqueur d'arrêt (remplace le marqueur vert)
         if (!stopMarker) {
             stopMarker = L.marker(e.latlng, {
                 title: "Votre arrêt",
@@ -245,8 +416,15 @@ function activerModeArret() {
                     shadowSize: [41, 41]
                 })
             }).addTo(map);
+            stopMarker.bindPopup("🚏 Votre arrêt");
         } else {
             stopMarker.setLatLng(e.latlng);
+        }
+        
+        // Supprimer le marqueur vert de position initiale
+        if (userMarker) {
+            map.removeLayer(userMarker);
+            userMarker = null;
         }
 
         setStatus(`Arrêt placé à ${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)}. En attente du bus...`);
@@ -336,33 +514,25 @@ function verifierProximite(bus) {
 }
 
 // ---------------------------------------------------------
-// DEMANDER LA PERMISSION DE LOCALISATION
-// ---------------------------------------------------------
-function demanderPermissionGPS() {
-    navigator.geolocation.getCurrentPosition(
-        () => {
-            console.log("Permission GPS accordée");
-        },
-        (err) => {
-            console.warn("Permission GPS refusée:", err);
-            alert("L'application a besoin de votre localisation pour fonctionner.");
-        },
-        { enableHighAccuracy: true }
-    );
-}
-
-// ---------------------------------------------------------
 // CORDOVA READY
 // ---------------------------------------------------------
-document.addEventListener("deviceready", () => {
+document.addEventListener("deviceready", async () => {
     console.log("Cordova ready!");
 
     initMap();
     initSocket();
 
-    // Demander les permissions
-    demanderPermissionGPS();
+    // NOUVEAU : Demander les permissions avant tout
+    try {
+        await demanderPermissionsLocalisation();
+        console.log("✅ Permissions obtenues, obtention de la position...");
+        obtenirPositionInitiale();
+    } catch (error) {
+        console.error("❌ Permissions refusées ou GPS inactif:", error);
+        setStatus("GPS non disponible. Activez-le pour utiliser l'app.");
+    }
 
+    // Demander permission pour les notifications
     if (window.cordova && cordova.plugins && cordova.plugins.notification) {
         cordova.plugins.notification.local.requestPermission((granted) => {
             console.log("Permission notifications:", granted);
@@ -370,7 +540,7 @@ document.addEventListener("deviceready", () => {
     }
 
     appReady = true;
-    setStatus("Application prête ! Choisissez un mode.");
+    console.log("✅ App prête !");
 }, false);
 
 // ---------------------------------------------------------
@@ -378,10 +548,18 @@ document.addEventListener("deviceready", () => {
 // ---------------------------------------------------------
 if (typeof cordova === 'undefined') {
     console.warn("Cordova non détecté - Mode web");
-    setTimeout(() => {
+    setTimeout(async () => {
         initMap();
         initSocket();
+        
+        try {
+            await demanderPermissionsLocalisation();
+            obtenirPositionInitiale();
+        } catch (error) {
+            console.warn("Permission GPS refusée en mode web");
+            setStatus("Mode web - GPS non disponible. Choisissez un mode.");
+        }
+        
         appReady = true;
-        setStatus("Mode web - Application prête !");
     }, 500);
 }
