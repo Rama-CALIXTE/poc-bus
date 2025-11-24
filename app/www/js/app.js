@@ -78,6 +78,10 @@ function activerModeBus() {
         return;
     }
 
+    console.log("\n========================================");
+    console.log("🚌 ACTIVATION MODE BUS");
+    console.log("========================================");
+
     mode = "bus";
     busNearNotified = false;
     
@@ -91,19 +95,40 @@ function activerModeBus() {
         stopPosition = null;
     }
 
+    // Arrêter l'intervalle précédent s'il existe
+    if (gpsInterval) {
+        console.log("⏹️ Arrêt de l'intervalle précédent");
+        clearInterval(gpsInterval);
+        gpsInterval = null;
+    }
+
     setStatus("Mode BUS : envoi GPS actif...");
 
-    // Arrêter l'intervalle précédent s'il existe
-    if (gpsInterval) clearInterval(gpsInterval);
+    let compteurEnvois = 0;
 
     // Fonction d'envoi GPS
     function envoyerPosition() {
+        compteurEnvois++;
+        console.log(`\n--- 📡 ENVOI #${compteurEnvois} ---`);
+        console.log("Heure:", new Date().toLocaleTimeString());
+        console.log("🔍 Tentative d'obtention GPS...");
+        
+        // Vérifier si navigator.geolocation existe
+        if (!navigator.geolocation) {
+            const msg = "❌ Géolocalisation non supportée par ce navigateur";
+            console.error(msg);
+            alert(msg);
+            setStatus(msg);
+            return;
+        }
+        
         navigator.geolocation.getCurrentPosition(
             (pos) => {
                 const lat = pos.coords.latitude;
                 const lng = pos.coords.longitude;
 
-                console.log("📍 Position GPS obtenue:", lat, lng);
+                console.log("✅ Position GPS obtenue:", lat, lng);
+                console.log("   Précision:", pos.coords.accuracy, "mètres");
                 console.log("🚀 Envoi au serveur...");
 
                 // Afficher le bus sur la carte
@@ -121,28 +146,65 @@ function activerModeBus() {
                 };
                 
                 console.log("📦 Payload:", JSON.stringify(payload));
+                console.log("🔌 Socket connecté?", socket.connected);
+                console.log("🆔 Socket ID:", socket.id);
+                
+                if (!socket.connected) {
+                    const msg = "❌ Socket déconnecté ! Impossible d'envoyer.";
+                    console.error(msg);
+                    alert(msg);
+                    setStatus(msg);
+                    return;
+                }
+                
                 socket.emit("bus:position", payload);
-                console.log("✅ Émission bus:position envoyée");
+                console.log("✅ Émission bus:position envoyée avec succès");
+                console.log(`📊 Total envois réussis: ${compteurEnvois}`);
 
-                setStatus(`Mode BUS actif - Position: ${lat.toFixed(4)}, ${lng.toFixed(4)}`);
+                setStatus(`✅ Envoi #${compteurEnvois} - Position: ${lat.toFixed(4)}, ${lng.toFixed(4)}`);
             },
             (err) => {
-                console.error("Erreur GPS:", err);
-                setStatus("Erreur GPS: " + err.message);
+                console.error("❌ ERREUR GPS:");
+                console.error("   Code:", err.code);
+                console.error("   Message:", err.message);
+                
+                let msgErreur = "Erreur GPS: ";
+                switch(err.code) {
+                    case 1:
+                        msgErreur += "Permission refusée. Autorisez la localisation dans les paramètres.";
+                        break;
+                    case 2:
+                        msgErreur += "Position indisponible. Êtes-vous à l'intérieur ?";
+                        break;
+                    case 3:
+                        msgErreur += "Timeout. Réessayez.";
+                        break;
+                    default:
+                        msgErreur += err.message;
+                }
+                
+                console.error(msgErreur);
+                alert(msgErreur);
+                setStatus(msgErreur);
             },
             {
                 enableHighAccuracy: true,
-                timeout: 10000,
+                timeout: 15000,
                 maximumAge: 0
             }
         );
     }
 
     // Première position immédiate
+    console.log("🚀 Premier envoi GPS immédiat...");
     envoyerPosition();
 
     // Puis toutes les 5 secondes
+    console.log("⏰ Démarrage intervalle : envoi toutes les 5 secondes");
     gpsInterval = setInterval(envoyerPosition, 5000);
+    
+    console.log("✅ Mode BUS activé avec succès");
+    console.log("========================================\n");
 }
 
 // ---------------------------------------------------------

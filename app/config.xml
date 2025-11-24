@@ -9,14 +9,13 @@
         Apache Cordova Team
     </author>
 
-    <platform name="android">
-        <edit-config file="app/src/main/AndroidManifest.xml"
-                     mode="merge"
-                     target="/manifest/application">
-            <application android:usesCleartextTraffic="true" />
-        </edit-config>
-    </platform>
-
+<platform name="android">
+    <config-file target="AndroidManifest.xml" parent="/*">
+        <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+        <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+        <uses-feature android:name="android.hardware.location.gps" />
+    </config-file>
+</platform>
     <content src="index.html" />
     <allow-intent href="http://*/*" />
     <allow-intent href="https://*/*" />
